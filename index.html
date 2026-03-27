@@ -25,10 +25,13 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-// --- PASTE YOUR FULL PRESET_REGIONS ARRAY HERE ---
+// --- DATA: PRESET REGIONS ---
+const PRESET_REGIONS = [
+    { name: "Right foot - Heel", pos: [0, 0.05, 0.15], rot: [0, 0, 0], scale: [0.1, 0.1, 0.1] },
+    { name: "Left foot - Heel", pos: [0, 0.05, 0.15], rot: [0, 0, 0], scale: [0.1, 0.1, 0.1] }
+];
 
 const urls = {
-    // Note: 'main' branch raw URLs used here
     left: "https://raw.githubusercontent.com/Stuart-McNeill/leg-selectionv1/main/LeftLowerLeg.glb",
     right: "https://raw.githubusercontent.com/Stuart-McNeill/leg-selectionv1/971bffc460a769fad0659121b50fb7ea9904420c/RightLowerLeg.glb"
 };
@@ -74,8 +77,6 @@ function init() {
 
     const handleInput = (e) => {
         if (!isLoaded || mode !== "mark") return;
-        
-        // Prevents ghost clicks on some mobile browsers
         if (e.type === 'touchstart') e.preventDefault();
 
         const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -88,7 +89,6 @@ function init() {
         performRaycast();
     };
 
-    // Use only touchstart for mobile to prevent double-firing with mousedown
     renderer.domElement.addEventListener("mousedown", (e) => { if(!('ontouchstart' in window)) handleInput(e); });
     renderer.domElement.addEventListener("touchstart", handleInput, { passive: false });
     
@@ -151,10 +151,10 @@ function loadFoot() {
         });
         
         const box = new THREE.Box3().setFromObject(model);
-        const size = new THREE.Vector3();
-        box.getSize(size);
         const center = new THREE.Vector3();
         box.getCenter(center);
+        const size = new THREE.Vector3();
+        box.getSize(size);
 
         model.position.x = -center.x;
         model.position.y = -box.min.y; 
@@ -181,7 +181,6 @@ function addRegion(name, pos, rot, scale) {
     regionGroup.add(mesh);
 }
 
-// --- EXPO BRIDGE COMMANDS ---
 window.handleMobileCommand = (json) => {
     const data = JSON.parse(json);
     if (data.action === 'SELECT') { currentFoot = data.side; loadFoot(); }
@@ -191,12 +190,8 @@ window.handleMobileCommand = (json) => {
     }
     if (data.action === 'UNDO') {
         if (markerGroup.children.length > 0) {
-            // Remove the last 3D object
             markerGroup.remove(markerGroup.children[markerGroup.children.length - 1]);
-            // Remove from logs
             markerLogs.pop();
-            
-            // Update the App UI immediately
             const lastRegion = markerLogs.length > 0 ? markerLogs[markerLogs.length - 1].region : "READY";
             if (window.ReactNativeWebView) {
                 window.ReactNativeWebView.postMessage(JSON.stringify({
