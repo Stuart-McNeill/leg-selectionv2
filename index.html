@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D Leg Analysis V4</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #0a0a0c; touch-action: none; }
+        #ui-layer { display: none !important; }
+    </style>
+</head>
+<body>
+
+<script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// --- PASTE YOUR FULL PRESET_REGIONS ARRAY HERE ---
+
+const urls = {
+    // Note: 'main' branch raw URLs used here
+    left: "https://raw.githubusercontent.com/Stuart-McNeill/leg-selectionv1/main/LeftLowerLeg.glb",
+    right: "https://raw.githubusercontent.com/Stuart-McNeill/leg-selectionv1/971bffc460a769fad0659121b50fb7ea9904420c/RightLowerLeg.glb"
+};
+
+let scene, camera, renderer, controls;
+let raycaster = new THREE.Raycaster();
+let mouse = new THREE.Vector2();
+let currentFoot = "right";
+let footGroup = new THREE.Group();
+let markerGroup = new THREE.Group();
+let regionGroup = new THREE.Group(); 
+let isLoaded = false;
+let mode = "rotate"; 
+let markerLogs = [];
+
+init();
+
+function init() {
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0a0c);
+    camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 100);
+    
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x222222, 3.0));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+    sun.position.set(5, 5, 5);
+    scene.add(sun);
+
+    scene.add(footGroup);
+    scene.add(markerGroup);
+    regionGroup.visible = false; 
+    scene.add(regionGroup);
+
+    PRESET_REGIONS.forEach(data => addRegion(data.name, data.pos, data.rot, data.scale));
+
+    const handleInput = (e) => {
+        if (!isLoaded || mode !== "mark") return;
+        
+        // Prevents ghost clicks on some mobile browsers
+        if (e.type === 'touchstart') e.preventDefault();
+
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+        
+        performRaycast();
+    };
+
+    // Use only touchstart for mobile to prevent double-firing with mousedown
+    renderer.domElement.addEventListener("mousedown", (e) => { if(!('ontouchstart' in window)) handleInput(e); });
+    renderer.domElement.addEventListener("touchstart", handleInput, { passive: false });
+    
+    window.addEventListener("resize", onResize);
+    loadFoot();
+    animate();
+}
+
+function performRaycast() {
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObjects(footGroup.children, true);
+    
+    if (hits.length > 0) {
+        const pos = hits[0].point;
+        let region = "External Surface";
+        
+        regionGroup.children.forEach(box => {
+            const side = currentFoot === "left" ? "Left foot" : "Right foot";
+            if (!box.userData.name.includes(side)) return;
+
+            const localPoint = pos.clone().applyMatrix4(box.matrixWorld.clone().invert());
+            if (Math.abs(localPoint.x) < 0.5 && Math.abs(localPoint.y) < 0.5 && Math.abs(localPoint.z) < 0.5) {
+                region = box.userData.name;
+            }
+        });
+
+        const dot = new THREE.Mesh(
+            new THREE.SphereGeometry(0.008), 
+            new THREE.MeshBasicMaterial({ color: 0xff4400 })
+        );
+        dot.position.copy(pos);
+        markerGroup.add(dot);
+        
+        const cleanName = region.replace(/Left foot - |Right foot - /g, "");
+        markerLogs.push({ region: cleanName });
+        
+        if (window.ReactNativeWebView) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+                count: markerGroup.children.length,
+                region: cleanName
+            }));
+        }
+    }
+}
+
+function loadFoot() {
+    isLoaded = false;
+    footGroup.clear();
+    markerGroup.clear();
+    markerLogs = [];
+
+    new GLTFLoader().load(urls[currentFoot], (gltf) => {
+        const model = gltf.scene;
+        model.traverse(c => { 
+            if(c.isMesh) {
+                c.material = new THREE.MeshStandardMaterial({ 
+                    color: 0xcccccc, roughness: 0.4, metalness: 0.2 
+                }); 
+            }
+        });
+        
+        const box = new THREE.Box3().setFromObject(model);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+
+        model.position.x = -center.x;
+        model.position.y = -box.min.y; 
+        model.position.z = -center.z;
+
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scaleFactor = 1.0 / maxDim;
+        model.scale.setScalar(scaleFactor);
+        model.position.multiplyScalar(scaleFactor);
+
+        footGroup.add(model);
+        camera.position.set(0, 1.2, 2.5);
+        controls.target.set(0, 0.4, 0);
+        isLoaded = true;
+    });
+}
+
+function addRegion(name, pos, rot, scale) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1));
+    mesh.position.set(...pos);
+    mesh.rotation.set(...rot);
+    mesh.scale.set(...scale);
+    mesh.userData.name = name;
+    regionGroup.add(mesh);
+}
+
+// --- EXPO BRIDGE COMMANDS ---
+window.handleMobileCommand = (json) => {
+    const data = JSON.parse(json);
+    if (data.action === 'SELECT') { currentFoot = data.side; loadFoot(); }
+    if (data.action === 'SET_MODE') {
+        mode = data.mode;
+        controls.enabled = (mode === "rotate");
+    }
+    if (data.action === 'UNDO') {
+        if (markerGroup.children.length > 0) {
+            // Remove the last 3D object
+            markerGroup.remove(markerGroup.children[markerGroup.children.length - 1]);
+            // Remove from logs
+            markerLogs.pop();
+            
+            // Update the App UI immediately
+            const lastRegion = markerLogs.length > 0 ? markerLogs[markerLogs.length - 1].region : "READY";
+            if (window.ReactNativeWebView) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                    count: markerGroup.children.length,
+                    region: lastRegion
+                }));
+            }
+        }
+    }
+    if (data.action === 'CLEAR') {
+        markerGroup.clear();
+        markerLogs = [];
+        if (window.ReactNativeWebView) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+                count: 0,
+                region: "READY"
+            }));
+        }
+    }
+};
+
+function onResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+}
+</script>
+</body>
+</html>
